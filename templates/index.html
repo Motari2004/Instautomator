@@ -24,12 +24,15 @@
                 </h1>
                 <p class="text-[10px] text-slate-500 font-mono mt-1">TOTAL ACTIONS: <span id="total-tasks" class="text-blue-400">0</span></p>
             </div>
-            <div class="text-right">
+            <div class="text-right space-y-1">
                 <div id="status-badge" class="px-3 py-1 rounded-full text-xs font-mono bg-blue-900/30 text-blue-400 border border-blue-500/30 animate-pulse">
                     System Online
                 </div>
-                <div class="text-[10px] text-slate-500 mt-2 font-mono">
-                    EXT-PULSE: <span id="pulse-val" class="text-green-500">--:--:--</span>
+                <div class="text-[9px] text-slate-500 font-mono">
+                    SYS-PULSE: <span id="pulse-val" class="text-blue-400">--:--:--</span>
+                </div>
+                <div class="text-[9px] text-slate-500 font-mono">
+                    CRON-PULSE: <span id="cron-pulse-val" class="text-green-500">WAITING...</span>
                 </div>
             </div>
         </div>
@@ -148,22 +151,19 @@
 
         setInterval(() => {
             fetch('/status').then(r => r.json()).then(d => {
-                // Core Data
                 document.getElementById('auto-report').innerText = d.auto_report;
                 document.getElementById('cycle-day-label').innerText = "Cycle Day: " + d.auto_day;
                 
-                // Super Features (Pulse & Tasks)
                 if(d.heartbeat) document.getElementById('pulse-val').innerText = d.heartbeat;
+                if(d.cron_heartbeat) document.getElementById('cron-pulse-val').innerText = d.cron_heartbeat;
                 if(d.total_tasks !== undefined) document.getElementById('total-tasks').innerText = d.total_tasks;
 
-                // Day Indicators
                 [1, 2, 3, 4].forEach(day => {
                     const el = document.getElementById('d' + day);
                     if (d.auto_day === day) el.classList.add('day-active');
                     else el.classList.remove('day-active');
                 });
 
-                // Status Log
                 if (d.status !== lastStatus) {
                     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                     document.getElementById('log').innerHTML += `<div class="text-slate-300 border-l-2 border-blue-500/20 pl-3">
