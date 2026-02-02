@@ -11,6 +11,7 @@
         .log-container::-webkit-scrollbar { width: 4px; }
         .log-container::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 10px; }
         .day-active { border-color: #3b82f6; background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+        .input-locked { background-color: #1e293b !important; color: #64748b !important; cursor: not-allowed; }
     </style>
 </head>
 <body class="p-4 md:p-8">
@@ -40,14 +41,17 @@
 
             <div class="bg-slate-900/80 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-500 mb-1">Last Automated Task Result:</p>
-                <div id="auto-report" class="text-sm font-mono text-blue-300 italic">
-                    Waiting for background process...
-                </div>
+                <div id="auto-report" class="text-sm font-mono text-blue-300 italic">Waiting...</div>
             </div>
         </div>
 
         <div class="glass p-6 rounded-2xl mb-6">
-            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-4">Manual Account Connection</h2>
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Manual Account Connection</h2>
+                <button id="lock-btn" onclick="toggleLock()" class="text-xs font-bold px-4 py-1.5 rounded-full border border-blue-500 text-blue-400 hover:bg-blue-500 hover:text-white transition-all">
+                    🔒 Lock Credentials
+                </button>
+            </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <input type="text" id="username" placeholder="Instagram Username" class="bg-slate-900 border border-slate-700 rounded-lg p-3 focus:outline-none focus:border-blue-500 transition-all">
                 <input type="password" id="password" placeholder="Password" class="bg-slate-900 border border-slate-700 rounded-lg p-3 focus:outline-none focus:border-blue-500 transition-all">
@@ -60,44 +64,73 @@
                 <div class="space-y-4">
                     <input type="text" id="target" placeholder="Target Account" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5">
                     <input type="number" id="follow_amount" value="20" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5">
-                    <button onclick="startTask('follow')" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg shadow-blue-900/20">
-                        Launch Follow Session
-                    </button>
+                    <button onclick="startTask('follow')" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg">Launch Follow</button>
                 </div>
             </div>
 
             <div class="glass p-6 rounded-2xl">
                 <h2 class="text-lg font-bold mb-4">🗑️ Manual Unfollow</h2>
                 <div class="space-y-4">
-                    <div class="p-4 bg-slate-900/50 rounded-lg border border-slate-800">
-                        <p class="text-xs text-slate-400">Manual cleanup for non-followers.</p>
-                    </div>
                     <input type="number" id="unfollow_amount" value="20" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5">
-                    <button onclick="startTask('unfollow')" class="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 rounded-lg">
-                        Launch Unfollow Session
-                    </button>
+                    <button onclick="startTask('unfollow')" class="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 rounded-lg">Launch Unfollow</button>
                 </div>
             </div>
         </div>
 
         <div class="mt-8 glass p-6 rounded-2xl">
-            <div class="flex items-center justify-between mb-4">
-                <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Live Telemetry (Manual + Auto)</h2>
-                <span class="text-[10px] text-blue-500 font-mono">SCORP_IO_LOG_V1.5</span>
-            </div>
             <div id="log" class="log-container h-48 overflow-y-auto font-mono text-sm space-y-2 p-2">
-                <div class="text-slate-500 italic">Connecting...</div>
+                <div class="text-slate-500 italic">Initializing system...</div>
             </div>
         </div>
     </div>
 
     <script>
         let lastStatus = "";
+        let isLocked = false;
 
+        // --- LOCKING LOGIC ---
+        function loadSavedCredentials() {
+            const savedUser = localStorage.getItem('ig_user');
+            const savedPass = localStorage.getItem('ig_pass');
+            if (savedUser && savedPass) {
+                document.getElementById('username').value = savedUser;
+                document.getElementById('password').value = savedPass;
+                toggleLock(true); // Force lock on load
+            }
+        }
+
+        function toggleLock(forceLock = false) {
+            const userInp = document.getElementById('username');
+            const passInp = document.getElementById('password');
+            const btn = document.getElementById('lock-btn');
+
+            if (!isLocked || forceLock) {
+                // LOCK IT
+                if(!userInp.value || !passInp.value) { alert("Enter credentials first!"); return; }
+                localStorage.setItem('ig_user', userInp.value);
+                localStorage.setItem('ig_pass', passInp.value);
+                userInp.disabled = true; passInp.disabled = true;
+                userInp.classList.add('input-locked'); passInp.classList.add('input-locked');
+                btn.innerText = "🔓 Unlock Credentials";
+                btn.classList.replace('text-blue-400', 'text-red-400');
+                btn.classList.replace('border-blue-500', 'border-red-500');
+                isLocked = true;
+            } else {
+                // UNLOCK IT
+                userInp.disabled = false; passInp.disabled = false;
+                userInp.classList.remove('input-locked'); passInp.classList.remove('input-locked');
+                btn.innerText = "🔒 Lock Credentials";
+                btn.classList.replace('text-red-400', 'text-blue-400');
+                btn.classList.replace('border-red-500', 'border-blue-500');
+                isLocked = false;
+            }
+        }
+
+        // --- TASK LOGIC ---
         function startTask(taskType) {
             const user = document.getElementById('username').value;
             const pass = document.getElementById('password').value;
-            if (!user || !pass) { alert("Please enter credentials first."); return; }
+            if (!user || !pass) { alert("Credentials missing."); return; }
 
             const formData = new FormData();
             formData.append('username', user);
@@ -105,46 +138,34 @@
             formData.append('amount', document.getElementById(taskType + '_amount').value);
             if (taskType === 'follow') formData.append('target', document.getElementById('target').value);
 
-            const log = document.getElementById('log');
-            log.innerHTML += `<div class="text-yellow-500 font-bold">🚀 Starting manual ${taskType}...</div>`;
-
+            document.getElementById('log').innerHTML += `<div class="text-yellow-500 font-bold">🚀 Starting manual ${taskType}...</div>`;
             fetch('/run-' + taskType, { method: 'POST', body: formData });
         }
 
-        // Automatic Status Polling
+        // --- STATUS POLLING ---
         setInterval(() => {
             fetch('/status').then(r => r.json()).then(d => {
-                const log = document.getElementById('log');
-                
-                // Update Auto-Pilot UI
                 document.getElementById('auto-report').innerText = d.auto_report;
                 document.getElementById('cycle-day-label').innerText = "Cycle Day: " + d.auto_day;
-                
-                // Highlight the current active day in the grid
                 [1, 2, 3, 4].forEach(day => {
                     const el = document.getElementById('d' + day);
                     if (d.auto_day === day) el.classList.add('day-active');
                     else el.classList.remove('day-active');
                 });
 
-                // Update Telemetry Log
                 if (d.status !== lastStatus) {
                     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    let color = "text-slate-300";
-                    if (d.status.includes('❌')) color = "text-red-400";
-                    if (d.status.includes('✅') || d.status.includes('🏁')) color = "text-green-400";
-                    if (d.status.includes('🤖')) color = "text-blue-400";
-
-                    log.innerHTML += `<div class="${color} border-l-2 border-blue-500/20 pl-3">
-                        <span class="text-[10px] opacity-40 font-mono mr-2">${time}</span>
-                        ${d.status}
+                    document.getElementById('log').innerHTML += `<div class="text-slate-300 border-l-2 border-blue-500/20 pl-3">
+                        <span class="text-[10px] opacity-40 mr-2">${time}</span> ${d.status}
                     </div>`;
-                    
                     lastStatus = d.status;
-                    log.scrollTop = log.scrollHeight;
+                    document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
                 }
             });
         }, 3000);
+
+        // Run on Page Load
+        loadSavedCredentials();
     </script>
 </body>
 </html>
