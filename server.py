@@ -1,10 +1,11 @@
-from flask import Flask, render_template, request, jsonify
-from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired, LoginRequired
 import os
+import json
 import random
 import time
 import threading
+from flask import Flask, render_template, request, jsonify
+from instagrapi import Client
+from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired, LoginRequired
 
 app = Flask(__name__)
 
@@ -18,36 +19,47 @@ cl_unfollow = Client()
 bot_status = "System Ready. Waiting for action..."
 
 def start_session(client, username, password, task_type, verification_code=None):
-    """Robust login handling for Render/Local environments"""
-    session_file = f"/tmp/session_{task_type}.json" if IS_PROD else f"session_{task_type}.json"
-    
-    # 1. Set a realistic Mobile User-Agent to reduce 'Suspicious Login' flags
+    """
+    Session Strategy:
+    1. Check Render Env Vars (IG_FOLLOW_SESSION / IG_UNFOLLOW_SESSION)
+    2. Check Local Files (session_follow.json / session_unfollow.json)
+    3. Fallback to Login
+    """
+    # 1. Try Environment Variables (Production Path)
+    env_key = f"IG_{task_type.upper()}_SESSION"
+    env_data = os.environ.get(env_key)
+
+    # 2. Set realistic headers
     client.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; OnePlus3T; oneplus3; qcom; en_US; 445305141)")
 
     try:
-        # 2. Try to load an existing session first
-        if os.path.exists(session_file):
-            print(f"🔄 Loading {task_type} session for {username}...")
-            client.load_settings(session_file)
+        if env_data:
+            print(f"🚀 Loading {task_type} session from Render Environment Variable...")
+            client.set_settings(json.loads(env_data))
+        else:
+            # 3. Fallback to Local Files (Development Path)
+            file_path = f"session_{task_type}.json"
+            if os.path.exists(file_path):
+                print(f"📂 Loading {task_type} session from local file...")
+                client.load_settings(file_path)
 
-        # 3. Attempt Login
+        # 4. Attempt Authentication
         if verification_code:
-            # This handles the 2FA code if provided from the UI
             client.login(username, password, verification_code=verification_code)
         else:
+            # login() returns True if session is valid or login succeeds
             client.login(username, password)
-            
-        client.dump_settings(session_file)
+        
+        # In Prod, we can't write back to Env Vars, but we can log the new session
+        # so you can copy it if it changes.
         return True
 
     except TwoFactorRequired:
-        print(f"🔐 2FA Required for {username}")
         return "2FA_REQUIRED"
     except ChallengeRequired:
-        print(f"⚠️ Challenge Required. Check Instagram app and click 'This Was Me'.")
         return "CHALLENGE_REQUIRED"
     except Exception as e:
-        print(f"❌ Login Error: {e}")
+        print(f"❌ {task_type} Login Error: {e}")
         return False
 
 @app.route('/')
@@ -64,22 +76,22 @@ def run_follow():
     pw = request.form.get('password')
     target = request.form.get('target')
     amount = int(request.form.get('amount'))
-    two_fa = request.form.get('2fa_code') # From your HTML form
+    two_fa = request.form.get('2fa_code')
 
     def task():
         global bot_status
-        bot_status = f"🔄 Authenticating @{user}..."
+        bot_status = f"🔄 Initializing Follow Session for @{user}..."
         
         login_result = start_session(cl_follow, user, pw, "follow", verification_code=two_fa)
         
         if login_result == "2FA_REQUIRED":
-            bot_status = "🔐 2FA Required! Please enter your code in the 2FA box."
+            bot_status = "🔐 2FA Required! Please enter your code in the UI."
             return
         elif login_result == "CHALLENGE_REQUIRED":
-            bot_status = "⚠️ Challenge! Open IG app & click 'This Was Me', then retry."
+            bot_status = "⚠️ Challenge! Open IG app & click 'This Was Me'."
             return
         elif not login_result:
-            bot_status = "❌ Login Failed. Check credentials or use a Proxy."
+            bot_status = "❌ Login Failed. Check credentials or Render Env Vars."
             return
 
         try:
@@ -92,10 +104,9 @@ def run_follow():
                 bot_status = f"👤 Following @{info.username}..."
                 cl_follow.user_follow(info.pk)
                 count += 1
-                
                 if count < amount:
-                    wait = random.uniform(45, 90) # Safety delays for 2026
-                    bot_status = f"⏳ Delay: {int(wait)}s remaining..."
+                    wait = random.uniform(50, 100) # 2026 Safety: Slower is better
+                    bot_status = f"⏳ Delay: {int(wait)}s..."
                     time.sleep(wait)
 
             bot_status = f"🏁 Done! Followed {count} users."
@@ -114,7 +125,7 @@ def run_unfollow():
 
     def task():
         global bot_status
-        bot_status = f"🔄 Authenticating @{user}..."
+        bot_status = f"🔄 Initializing Unfollow Session..."
         
         login_result = start_session(cl_unfollow, user, pw, "unfollow", verification_code=two_fa)
         
@@ -131,7 +142,7 @@ def run_unfollow():
                 bot_status = f"🗑️ Unfollowing @{u.username}..."
                 cl_unfollow.user_unfollow(u.pk)
                 count += 1
-                time.sleep(random.uniform(45, 90))
+                time.sleep(random.uniform(50, 100))
 
             bot_status = f"🏁 Done! Unfollowed {count} users."
         except Exception as e:
