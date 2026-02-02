@@ -10,51 +10,38 @@ from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired, LoginReq
 
 app = Flask(__name__)
 
-# --- CONFIGURATION ---
+# Detect environment
 IS_PROD = "RENDER" in os.environ
-RENDER_URL = "https://instautomator.onrender.com"
-# Persistence file ensures the bot remembers its day/report even after Render restarts
+RENDER_URL = "https://instautomator.onrender.com" 
 STATE_FILE = "/tmp/bot_state.json" if IS_PROD else "bot_state.json"
 
-# Independent clients for background tasks
+# Clients
 cl_follow = Client()
 cl_unfollow = Client()
+cl_auto = Client() # Dedicated client for background auto-pilot
 
-bot_status = "System Ready. Auto-Pilot Standby..."
+bot_status = "System Ready. Waiting for action..."
 
-# --- PERSISTENCE LOGIC ---
+# --- PERSISTENCE HELPERS ---
 
 def get_state():
-    """Reads the current day and last report from the state file."""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, 'r') as f:
                 return json.load(f)
-        except:
-            pass
-    return {
-        "day": 1, 
-        "last_run_date": None, 
-        "last_result": "Waiting for first automated run..."
-    }
+        except: pass
+    return {"day": 1, "last_run_date": None, "last_result": "Auto-Pilot Standby..."}
 
 def save_state(day, date_str, result_msg):
-    """Saves the cycle progress and the report message."""
     with open(STATE_FILE, 'w') as f:
-        json.dump({
-            "day": day, 
-            "last_run_date": date_str, 
-            "last_result": result_msg
-        }, f)
+        json.dump({"day": day, "last_run_date": date_str, "last_result": result_msg}, f)
 
-# --- AUTO-PILOT ENGINE ---
-
-
+# --- AUTO-PILOT LOGIC (RENDER ONLY) ---
 
 def auto_pilot_loop():
+    """Background task that runs the 4-day cycle using environment variables"""
     global bot_status
-    
-    # Credentials from Render Env Vars
+    # These must be set in Render Env Vars
     user = os.environ.get("IG_USERNAME")
     pw = os.environ.get("IG_PASSWORD")
     target_string = os.environ.get("IG_TARGET_LIST", "")
@@ -64,86 +51,66 @@ def auto_pilot_loop():
         state = get_state()
         today = time.strftime("%Y-%m-%d")
 
-        # Only run if we haven't completed a task today
-        if state["last_run_date"] != today:
+        if state["last_run_date"] != today and user and pw:
             current_day = state["day"]
             
-            if current_day <= 3:
-                # DAYS 1, 2, 3: FOLLOW 40
-                target = random.choice(target_list) if target_list else "instagram"
-                bot_status = f"🤖 Day {current_day}: Target selected -> @{target}"
-                
-                try:
-                    # Load session from IG_FOLLOW_SESSION
-                    session_data = os.environ.get("IG_FOLLOW_SESSION")
-                    cl_follow.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; OnePlus3T; oneplus3; qcom; en_US; 445305141)")
-                    if session_data:
-                        cl_follow.set_settings(json.loads(session_data))
-                    cl_follow.login(user, pw)
-                    
-                    target_id = cl_follow.user_id_from_username(target)
-                    users = cl_follow.user_followers_v1(target_id, amount=40)
-                    
-                    count = 0
-                    for u in users:
-                        cl_follow.user_follow(u.pk)
-                        count += 1
-                        bot_status = f"🤖 Day {current_day}: Following {count}/40 from @{target}"
+            try:
+                # Setup Session
+                session_data = os.environ.get("IG_FOLLOW_SESSION")
+                cl_auto.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; OnePlus3T; oneplus3; qcom; en_US; 445305141)")
+                if session_data: cl_auto.set_settings(json.loads(session_data))
+                cl_auto.login(user, pw)
+
+                if current_day <= 3:
+                    # FOLLOW CYCLE
+                    target = random.choice(target_list) if target_list else "cristiano"
+                    users = cl_auto.user_followers_v1(cl_auto.user_id_from_username(target), amount=40)
+                    for idx, u in enumerate(users):
+                        cl_auto.user_follow(u.pk)
+                        bot_status = f"🤖 Auto: Day {current_day} | Followed {idx+1}/40"
                         time.sleep(random.uniform(60, 120))
-                    
-                    # Log success to persistence
-                    report = f"✅ Success: Day {current_day} followed {count} users from @{target}."
-                    save_state(current_day + 1, today, report)
-                    bot_status = report
-
-                except Exception as e:
-                    error_report = f"❌ Error on Day {current_day}: {str(e)[:40]}"
-                    save_state(current_day, today, error_report)
-                    bot_status = error_report
-
-            else:
-                # DAY 4: UNFOLLOW 50 NON-FOLLOWERS
-                bot_status = "🤖 Day 4: Starting Smart Unfollow..."
-                try:
-                    session_data = os.environ.get("IG_UNFOLLOW_SESSION")
-                    cl_unfollow.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; OnePlus3T; oneplus3; qcom; en_US; 445305141)")
-                    if session_data:
-                        cl_unfollow.set_settings(json.loads(session_data))
-                    cl_unfollow.login(user, pw)
-                    
-                    my_id = cl_unfollow.user_id
-                    follower_ids = {u.pk for u in cl_unfollow.user_followers_v1(my_id, amount=0)}
-                    following = cl_unfollow.user_following_v1(my_id, amount=0)
+                    msg = f"✅ Auto: Day {current_day} Success (@{target})"
+                    save_state(current_day + 1, today, msg)
+                else:
+                    # UNFOLLOW CYCLE
+                    follower_ids = {u.pk for u in cl_auto.user_followers_v1(cl_auto.user_id, amount=0)}
+                    following = cl_auto.user_following_v1(cl_auto.user_id, amount=0)
                     non_followers = [u for u in following if u.pk not in follower_ids][:50]
-                    
-                    count = 0
-                    for u in non_followers:
-                        cl_unfollow.user_unfollow(u.pk)
-                        count += 1
-                        bot_status = f"🤖 Day 4: Unfollowed {count}/50"
+                    for idx, u in enumerate(non_followers):
+                        cl_auto.user_unfollow(u.pk)
+                        bot_status = f"🤖 Auto: Day 4 | Unfollowed {idx+1}/{len(non_followers)}"
                         time.sleep(random.uniform(60, 120))
-                    
-                    report = f"✅ Success: Day 4 cleaned {count} non-followers."
-                    save_state(1, today, report) # Reset to Day 1
-                    bot_status = report
-                except Exception as e:
-                    error_report = f"❌ Error on Day 4: {str(e)[:40]}"
-                    save_state(4, today, error_report)
-                    bot_status = error_report
+                    msg = "✅ Auto: Day 4 Cleanup Success"
+                    save_state(1, today, msg)
+                
+                bot_status = msg
+            except Exception as e:
+                save_state(current_day, today, f"❌ Auto-Error: {str(e)[:30]}")
 
-        # Check for new day every hour
-        time.sleep(3600)
+        time.sleep(3600) # Check every hour
+
+# --- ORIGINAL MANUAL LOGIC ---
 
 def keep_alive():
-    """Internal ping to prevent Render sleep."""
     while True:
         try:
             requests.get(f"{RENDER_URL}/status", timeout=10)
-        except:
-            pass
+        except: pass
         time.sleep(780)
 
-# --- ROUTES ---
+def start_session(client, username, password, task_type, verification_code=None):
+    env_key = f"IG_{task_type.upper()}_SESSION"
+    env_data = os.environ.get(env_key)
+    client.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; OnePlus3T; oneplus3; qcom; en_US; 445305141)")
+    try:
+        if env_data: client.set_settings(json.loads(env_data))
+        else:
+            file_path = f"session_{task_type}.json"
+            if os.path.exists(file_path): client.load_settings(file_path)
+        client.login(username, password, verification_code=verification_code) if verification_code else client.login(username, password)
+        return True
+    except (TwoFactorRequired, ChallengeRequired) as e: return str(e)
+    except Exception: return False
 
 @app.route('/')
 def index():
@@ -154,33 +121,63 @@ def get_status():
     state = get_state()
     return jsonify({
         "status": bot_status,
-        "cycle_day": state["day"],
-        "last_report": state["last_result"],
-        "last_run": state["last_run_date"]
+        "auto_report": state["last_result"],
+        "auto_day": state["day"]
     })
 
-# Manual routes remain available for on-demand use
 @app.route('/run-follow', methods=['POST'])
 def run_follow():
-    user = request.form.get('username')
-    pw = request.form.get('password')
-    target = request.form.get('target')
-    amount = int(request.form.get('amount'))
-    
+    user, pw, target = request.form.get('username'), request.form.get('password'), request.form.get('target')
+    try: amount = int(request.form.get('amount'))
+    except: amount = 20
+    two_fa = request.form.get('2fa_code')
+
     def task():
         global bot_status
-        bot_status = f"🔄 Manual Follow starting for @{target}..."
-        # (Manual follow logic using cl_follow)
-    
+        bot_status = f"🔄 Manual: Authenticating @{user}..."
+        if start_session(cl_follow, user, pw, "follow", two_fa) == True:
+            try:
+                followers = cl_follow.user_followers_v1(cl_follow.user_id_from_username(target), amount=amount)
+                for idx, info in enumerate(followers):
+                    bot_status = f"👤 Manual: Following @{info.username} ({idx+1}/{amount})"
+                    cl_follow.user_follow(info.pk)
+                    if idx+1 < amount: time.sleep(random.uniform(60, 120))
+                bot_status = f"🏁 Manual Done! Followed {amount}."
+            except Exception as e: bot_status = f"❌ Error: {str(e)[:50]}"
+        else: bot_status = "❌ Login Failed"
+
+    threading.Thread(target=task).start()
+    return jsonify({"status": "started"})
+
+@app.route('/run-unfollow', methods=['POST'])
+def run_unfollow():
+    user, pw = request.form.get('username'), request.form.get('password')
+    try: amount = int(request.form.get('amount'))
+    except: amount = 20
+    two_fa = request.form.get('2fa_code')
+
+    def task():
+        global bot_status
+        bot_status = "🔄 Manual: Starting Unfollow..."
+        if start_session(cl_unfollow, user, pw, "unfollow", two_fa) == True:
+            try:
+                follower_ids = {u.pk for u in cl_unfollow.user_followers_v1(cl_unfollow.user_id, amount=0)}
+                following = cl_unfollow.user_following_v1(cl_unfollow.user_id, amount=0)
+                non_followers = [u for u in following if u.pk not in follower_ids][:amount]
+                for idx, u in enumerate(non_followers):
+                    bot_status = f"🗑️ Manual: Unfollowing @{u.username} ({idx+1}/{len(non_followers)})"
+                    cl_unfollow.user_unfollow(u.pk)
+                    if idx+1 < len(non_followers): time.sleep(random.uniform(60, 120))
+                bot_status = f"🏁 Manual Done! Removed {len(non_followers)}."
+            except Exception as e: bot_status = f"❌ Error: {str(e)[:50]}"
+
     threading.Thread(target=task).start()
     return jsonify({"status": "started"})
 
 if __name__ == '__main__':
     if IS_PROD:
-        # Keep server awake
         threading.Thread(target=keep_alive, daemon=True).start()
-        # Run the automated cycle
         threading.Thread(target=auto_pilot_loop, daemon=True).start()
-        
+    
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
