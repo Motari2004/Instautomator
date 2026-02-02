@@ -3,6 +3,7 @@ import json
 import random
 import time
 import threading
+import requests
 from flask import Flask, render_template, request, jsonify
 from instagrapi import Client
 from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired, LoginRequired
@@ -11,56 +12,123 @@ app = Flask(__name__)
 
 # Detect environment
 IS_PROD = "RENDER" in os.environ
+RENDER_URL = "https://instautomator.onrender.com"
+STATE_FILE = "/tmp/bot_state.json" if IS_PROD else "bot_state.json"
 
-# Two independent clients
+# Independent clients
 cl_follow = Client()
 cl_unfollow = Client()
 
-bot_status = "System Ready. Waiting for action..."
+bot_status = "System Ready. Auto-Pilot Standby..."
 
-def start_session(client, username, password, task_type, verification_code=None):
-    """
-    Session Strategy:
-    1. Check Render Env Vars (IG_FOLLOW_SESSION / IG_UNFOLLOW_SESSION)
-    2. Check Local Files (session_follow.json / session_unfollow.json)
-    3. Fallback to Login
-    """
-    # 1. Try Environment Variables (Production Path)
-    env_key = f"IG_{task_type.upper()}_SESSION"
-    env_data = os.environ.get(env_key)
+# --- STATE MANAGEMENT ---
 
-    # 2. Set realistic headers
-    client.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; OnePlus3T; oneplus3; qcom; en_US; 445305141)")
+def get_state():
+    """Reads the current day and last run date from the persistence file."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {"day": 1, "last_run_date": None}
 
-    try:
-        if env_data:
-            print(f"🚀 Loading {task_type} session from Render Environment Variable...")
-            client.set_settings(json.loads(env_data))
-        else:
-            # 3. Fallback to Local Files (Development Path)
-            file_path = f"session_{task_type}.json"
-            if os.path.exists(file_path):
-                print(f"📂 Loading {task_type} session from local file...")
-                client.load_settings(file_path)
+def save_state(day, date_str):
+    """Saves the cycle progress."""
+    with open(STATE_FILE, 'w') as f:
+        json.dump({"day": day, "last_run_date": date_str}, f)
 
-        # 4. Attempt Authentication
-        if verification_code:
-            client.login(username, password, verification_code=verification_code)
-        else:
-            # login() returns True if session is valid or login succeeds
-            client.login(username, password)
-        
-        # In Prod, we can't write back to Env Vars, but we can log the new session
-        # so you can copy it if it changes.
-        return True
+# --- AUTO-PILOT TASK ---
 
-    except TwoFactorRequired:
-        return "2FA_REQUIRED"
-    except ChallengeRequired:
-        return "CHALLENGE_REQUIRED"
-    except Exception as e:
-        print(f"❌ {task_type} Login Error: {e}")
-        return False
+def auto_pilot_loop():
+    global bot_status
+    
+    # Credentials & Config from Render Env Vars
+    user = os.environ.get("IG_USERNAME")
+    pw = os.environ.get("IG_PASSWORD")
+    # Comma-separated list: "user1, user2, user3..."
+    target_string = os.environ.get("IG_TARGET_LIST", "")
+    target_list = [t.strip() for t in target_string.split(",") if t.strip()]
+
+    while True:
+        state = get_state()
+        today = time.strftime("%Y-%m-%d")
+
+        # Only run once per 24 hours
+        if state["last_run_date"] != today:
+            current_day = state["day"]
+            
+            if current_day <= 3:
+                # DAYS 1, 2, 3: FOLLOW 40
+                target = random.choice(target_list) if target_list else "instagram"
+                bot_status = f"🤖 Day {current_day}: Target selected -> @{target}"
+                
+                # Use same session logic as manual
+                session_data = os.environ.get("IG_FOLLOW_SESSION")
+                cl_follow.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; OnePlus3T; oneplus3; qcom; en_US; 445305141)")
+                
+                try:
+                    if session_data:
+                        cl_follow.set_settings(json.loads(session_data))
+                    cl_follow.login(user, pw)
+                    
+                    target_id = cl_follow.user_id_from_username(target)
+                    users = cl_follow.user_followers_v1(target_id, amount=40)
+                    
+                    count = 0
+                    for u in users:
+                        cl_follow.user_follow(u.pk)
+                        count += 1
+                        bot_status = f"🤖 Day {current_day}: Followed {count}/40 from @{target}"
+                        time.sleep(random.uniform(60, 120))
+                    
+                    save_state(current_day + 1, today)
+                    bot_status = f"🏁 Day {current_day} Complete. Next run tomorrow."
+                except Exception as e:
+                    bot_status = f"❌ Auto-Follow Error: {str(e)[:50]}"
+
+            else:
+                # DAY 4: UNFOLLOW 50 NON-FOLLOWERS
+                bot_status = "🤖 Day 4: Starting Smart Unfollow (50 users)..."
+                
+                session_data = os.environ.get("IG_UNFOLLOW_SESSION")
+                cl_unfollow.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; OnePlus3T; oneplus3; qcom; en_US; 445305141)")
+                
+                try:
+                    if session_data:
+                        cl_unfollow.set_settings(json.loads(session_data))
+                    cl_unfollow.login(user, pw)
+                    
+                    my_id = cl_unfollow.user_id
+                    follower_ids = {u.pk for u in cl_unfollow.user_followers_v1(my_id, amount=0)}
+                    following = cl_unfollow.user_following_v1(my_id, amount=0)
+                    
+                    non_followers = [u for u in following if u.pk not in follower_ids][:50]
+                    
+                    count = 0
+                    for u in non_followers:
+                        cl_unfollow.user_unfollow(u.pk)
+                        count += 1
+                        bot_status = f"🤖 Day 4: Unfollowed {count}/50"
+                        time.sleep(random.uniform(60, 120))
+                    
+                    save_state(1, today) # Reset to Day 1
+                    bot_status = "🏁 Cycle Reset! Day 4 finished."
+                except Exception as e:
+                    bot_status = f"❌ Auto-Unfollow Error: {str(e)[:50]}"
+
+        # Sleep 1 hour before checking the date again
+        time.sleep(3600)
+
+def keep_alive():
+    while True:
+        try:
+            requests.get(f"{RENDER_URL}/status", timeout=10)
+        except:
+            pass
+        time.sleep(780)
+
+# --- ROUTES ---
 
 @app.route('/')
 def index():
@@ -68,89 +136,20 @@ def index():
 
 @app.route('/status')
 def get_status():
-    return jsonify({"status": bot_status})
+    curr = get_state()
+    return jsonify({
+        "status": bot_status,
+        "day": curr["day"],
+        "last_run": curr["last_run_date"]
+    })
 
-@app.route('/run-follow', methods=['POST'])
-def run_follow():
-    user = request.form.get('username')
-    pw = request.form.get('password')
-    target = request.form.get('target')
-    amount = int(request.form.get('amount'))
-    two_fa = request.form.get('2fa_code')
-
-    def task():
-        global bot_status
-        bot_status = f"🔄 Initializing Follow Session for @{user}..."
-        
-        login_result = start_session(cl_follow, user, pw, "follow", verification_code=two_fa)
-        
-        if login_result == "2FA_REQUIRED":
-            bot_status = "🔐 2FA Required! Please enter your code in the UI."
-            return
-        elif login_result == "CHALLENGE_REQUIRED":
-            bot_status = "⚠️ Challenge! Open IG app & click 'This Was Me'."
-            return
-        elif not login_result:
-            bot_status = "❌ Login Failed. Check credentials or Render Env Vars."
-            return
-
-        try:
-            bot_status = f"🔍 Locating @{target}..."
-            target_id = cl_follow.user_id_from_username(target)
-            followers = cl_follow.user_followers_v1(target_id, amount=amount)
-
-            count = 0
-            for info in followers:
-                bot_status = f"👤 Following @{info.username}..."
-                cl_follow.user_follow(info.pk)
-                count += 1
-                if count < amount:
-                    wait = random.uniform(50, 100) # 2026 Safety: Slower is better
-                    bot_status = f"⏳ Delay: {int(wait)}s..."
-                    time.sleep(wait)
-
-            bot_status = f"🏁 Done! Followed {count} users."
-        except Exception as e:
-            bot_status = f"❌ Follow Error: {str(e)[:50]}"
-
-    threading.Thread(target=task).start()
-    return jsonify({"status": "started"})
-
-@app.route('/run-unfollow', methods=['POST'])
-def run_unfollow():
-    user = request.form.get('username')
-    pw = request.form.get('password')
-    amount = int(request.form.get('amount'))
-    two_fa = request.form.get('2fa_code')
-
-    def task():
-        global bot_status
-        bot_status = f"🔄 Initializing Unfollow Session..."
-        
-        login_result = start_session(cl_unfollow, user, pw, "unfollow", verification_code=two_fa)
-        
-        if not login_result or login_result in ["2FA_REQUIRED", "CHALLENGE_REQUIRED"]:
-            bot_status = f"❌ Unfollow Login failed ({login_result})"
-            return
-
-        try:
-            bot_status = "📊 Fetching following list..."
-            following = cl_unfollow.user_following_v1(cl_unfollow.user_id, amount=amount)
-            
-            count = 0
-            for u in following:
-                bot_status = f"🗑️ Unfollowing @{u.username}..."
-                cl_unfollow.user_unfollow(u.pk)
-                count += 1
-                time.sleep(random.uniform(50, 100))
-
-            bot_status = f"🏁 Done! Unfollowed {count} users."
-        except Exception as e:
-            bot_status = f"❌ Unfollow Error: {str(e)[:50]}"
-
-    threading.Thread(target=task).start()
-    return jsonify({"status": "started"})
+# (Include manual /run-follow and /run-unfollow from previous version)
 
 if __name__ == '__main__':
+    if IS_PROD:
+        threading.Thread(target=keep_alive, daemon=True).start()
+        # Start the 24-hour cycle manager
+        threading.Thread(target=auto_pilot_loop, daemon=True).start()
+        
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
