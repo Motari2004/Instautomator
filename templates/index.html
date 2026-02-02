@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scorp.io338 | Insta-Automator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+        .log-container::-webkit-scrollbar { width: 4px; }
+        .log-container::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 10px; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto">
+        <div class="flex items-center justify-between mb-8">
+            <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                Insta-Control Panel
+            </h1>
+            <div id="status-badge" class="px-3 py-1 rounded-full text-xs font-mono bg-blue-900/30 text-blue-400 border border-blue-500/30 animate-pulse">
+                System Online
+            </div>
+        </div>
+
+        <div class="glass p-6 rounded-2xl mb-6">
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-4">Account Connection</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <input type="text" id="username" placeholder="Instagram Username" class="bg-slate-900 border border-slate-700 rounded-lg p-3 focus:outline-none focus:border-blue-500 transition-all">
+                <input type="password" id="password" placeholder="Password" class="bg-slate-900 border border-slate-700 rounded-lg p-3 focus:outline-none focus:border-blue-500 transition-all">
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="glass p-6 rounded-2xl">
+                <h2 class="text-lg font-bold mb-4 flex items-center">
+                    <span class="mr-2">👤</span> Follow Session
+                </h2>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Target Account</label>
+                        <input type="text" id="target" placeholder="e.g. cristiano" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Amount to Follow</label>
+                        <input type="number" id="follow_amount" value="20" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5">
+                    </div>
+                    <button onclick="startTask('follow')" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg transition-colors shadow-lg shadow-blue-900/20">
+                        Launch Follow Session
+                    </button>
+                </div>
+            </div>
+
+            <div class="glass p-6 rounded-2xl">
+                <h2 class="text-lg font-bold mb-4 flex items-center">
+                    <span class="mr-2">🗑️</span> Unfollow Session
+                </h2>
+                <div class="space-y-4">
+                    <div class="p-4 bg-slate-900/50 rounded-lg border border-slate-800">
+                        <p class="text-xs text-slate-400 leading-relaxed">
+                            This task will log in using your credentials above and begin removing accounts that don't follow you back.
+                        </p>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Amount to Unfollow</label>
+                        <input type="number" id="unfollow_amount" value="20" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5">
+                    </div>
+                    <button onclick="startTask('unfollow')" class="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 rounded-lg transition-colors">
+                        Launch Unfollow Session
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-8 glass p-6 rounded-2xl">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Live Telemetry</h2>
+                <span class="text-[10px] text-blue-500 font-mono">SCORP_IO_LOG_V1.2</span>
+            </div>
+            <div id="log" class="log-container h-48 overflow-y-auto font-mono text-sm space-y-2 p-2">
+                <div class="text-slate-500 italic">Waiting for connection...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let lastStatus = "";
+
+        // Function to start either Follow or Unfollow
+        function startTask(taskType) {
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+
+            if (!user || !pass) {
+                alert("Please enter credentials first.");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('username', user);
+            formData.append('password', pass);
+
+            let endpoint = '';
+
+            if (taskType === 'follow') {
+                formData.append('target', document.getElementById('target').value);
+                formData.append('amount', document.getElementById('follow_amount').value);
+                endpoint = '/run-follow';
+            } else {
+                formData.append('amount', document.getElementById('unfollow_amount').value);
+                endpoint = '/run-unfollow';
+            }
+
+            // Append start message to log locally
+            const log = document.getElementById('log');
+            log.innerHTML += `<div class="text-yellow-500 font-bold">🚀 Starting ${taskType} sequence...</div>`;
+
+            fetch(endpoint, { method: 'POST', body: formData })
+                .then(response => response.json())
+                .catch(err => console.error("Error starting task:", err));
+        }
+
+        // Automatic Status Polling
+        setInterval(() => {
+            fetch('/status').then(r => r.json()).then(d => {
+                const log = document.getElementById('log');
+                
+                // Only update if the status is different to keep the log clean
+                if (d.status !== lastStatus) {
+                    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    
+                    // Style errors differently
+                    let color = "text-slate-300";
+                    if (d.status.includes('❌')) color = "text-red-400";
+                    if (d.status.includes('✅')) color = "text-green-400";
+                    if (d.status.includes('⏳')) color = "text-blue-300";
+
+                    log.innerHTML += `<div class="${color} border-l-2 border-blue-500/20 pl-3">
+                                        <span class="text-[10px] opacity-40 font-mono mr-2">${time}</span>
+                                        ${d.status}
+                                      </div>`;
+                    
+                    lastStatus = d.status;
+                    log.scrollTop = log.scrollHeight; // Auto-scroll
+                }
+            });
+        }, 2000);
+    </script>
+</body>
+</html>
